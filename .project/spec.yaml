@@ -86,6 +86,17 @@ environment:
                 - git
                 - git-lfs
                 - vim
+                - ffmpeg
+                - libgl1
+                - libglvnd0
+                - libglib2.0-0t64
+                - libxcb1
+                - libxrender1
+                - libxext6
+                - libsm6
+                - build-essential
+                - cmake
+                - ninja-build
             - name: pip
               binary_path: /usr/local/bin/pip
               installed_packages:

@@ -1,0 +1,6 @@
+
+source ~/venvs/spatialvision/bin/activate
+#enter the container
+cd ~/nvidia-workbench/hrv
+nvwb attach
+exit

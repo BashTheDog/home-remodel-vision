@@ -1,1 +1,14 @@
-# apt packages to install should be listed one per line
+ffmpeg
+libgl1
+libglib2.0-0t64
+git
+git-lfs
+build-essential
+cmake
+ninja-build
+libxcb1
+libxrender1
+libxext6
+libsm6
+libgl1-mesa-dri
+libglvnd0
