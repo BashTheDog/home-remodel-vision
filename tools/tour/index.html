@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room Tour — __ROOM__</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    color: #eee;
+    font-family: system-ui, -apple-system, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── Main image area ─────────────────────────────── */
+  #stage {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  #img-a, #img-b {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    transition: opacity 0.15s ease;
+  }
+  #img-b { opacity: 0; }
+
+  /* ── HUD ─────────────────────────────────────────── */
+  #hud-top {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 14px 20px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
+    display: flex; align-items: center; justify-content: space-between;
+    pointer-events: none;
+    z-index: 10;
+  }
+  #room-name { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+  #frame-counter { font-size: 13px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+  /* ── Progress bar ────────────────────────────────── */
+  #progress-wrap {
+    position: fixed; bottom: 64px; left: 20px; right: 20px;
+    z-index: 10; cursor: pointer;
+  }
+  #progress-track {
+    height: 3px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    position: relative;
+  }
+  #progress-fill {
+    height: 100%;
+    background: #76b900;
+    border-radius: 2px;
+    transition: width 0.1s linear;
+  }
+  #progress-thumb {
+    position: absolute;
+    top: 50%; transform: translateY(-50%);
+    width: 12px; height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    margin-left: -6px;
+    box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  }
+
+  /* ── Controls bar ────────────────────────────────── */
+  #controls {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 10px 20px 14px;
+    background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%);
+    display: flex; align-items: center; gap: 12px;
+    z-index: 10;
+  }
+  button {
+    background: rgba(255,255,255,0.12);
+    border: none; border-radius: 6px;
+    color: #fff; cursor: pointer;
+    padding: 7px 14px; font-size: 13px;
+    transition: background 0.15s;
+  }
+  button:hover { background: rgba(255,255,255,0.22); }
+  button.active { background: #76b900; }
+
+  #speed-label { font-size: 12px; opacity: 0.6; white-space: nowrap; }
+  #speed {
+    -webkit-appearance: none;
+    width: 90px; height: 3px;
+    background: rgba(255,255,255,0.25);
+    border-radius: 2px; outline: none; cursor: pointer;
+  }
+  #speed::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px; height: 13px;
+    background: #fff; border-radius: 50%;
+  }
+
+  .spacer { flex: 1; }
+
+  #hint {
+    font-size: 11px; opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* ── Side nav arrows ─────────────────────────────── */
+  .nav-arrow {
+    position: fixed; top: 50%; transform: translateY(-50%);
+    background: rgba(0,0,0,0.35);
+    border: none; border-radius: 6px;
+    color: #fff; font-size: 28px;
+    width: 44px; height: 64px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+    transition: background 0.15s, opacity 0.15s;
+    opacity: 0.5;
+  }
+  .nav-arrow:hover { background: rgba(0,0,0,0.65); opacity: 1; }
+  #btn-prev { left: 10px; }
+  #btn-next { right: 10px; }
+</style>
+</head>
+<body>
+
+<div id="hud-top">
+  <span id="room-name">__ROOM__</span>
+  <span id="frame-counter">1 / 1</span>
+</div>
+
+<div id="stage">
+  <img id="img-a" alt="">
+  <img id="img-b" alt="">
+</div>
+
+<button class="nav-arrow" id="btn-prev">&#8249;</button>
+<button class="nav-arrow" id="btn-next">&#8250;</button>
+
+<div id="progress-wrap">
+  <div id="progress-track">
+    <div id="progress-fill" style="width:0%"></div>
+    <div id="progress-thumb" style="left:0%"></div>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="btn-play">&#9654; Play</button>
+  <button id="btn-restart">&#8635;</button>
+  <span class="spacer"></span>
+  <span id="speed-label">Speed</span>
+  <input id="speed" type="range" min="1" max="12" value="4">
+  <span class="spacer"></span>
+  <span id="hint">← → navigate &nbsp; Space play/pause</span>
+</div>
+
+<script>
+const FRAMES = __FRAMES_JSON__;
+const ROOM   = '__ROOM__';
+
+let cur     = 0;
+let playing = false;
+let timer   = null;
+let front   = 'a';   // which img element is visible
+
+const imgA    = document.getElementById('img-a');
+const imgB    = document.getElementById('img-b');
+const counter = document.getElementById('frame-counter');
+const fill    = document.getElementById('progress-fill');
+const thumb   = document.getElementById('progress-thumb');
+const btnPlay = document.getElementById('btn-play');
+const speedEl = document.getElementById('speed');
+
+function imgEl(which) { return which === 'a' ? imgA : imgB; }
+function other(which) { return which === 'a' ? 'b' : 'a'; }
+
+// Pre-load next frame in the background
+const preload = new Image();
+function preloadNext(idx) {
+  const next = (idx + 1) % FRAMES.length;
+  preload.src = `/frames/${FRAMES[next]}`;
+}
+
+function show(idx, instant) {
+  cur = ((idx % FRAMES.length) + FRAMES.length) % FRAMES.length;
+  const back = other(front);
+  const el   = imgEl(back);
+
+  el.onload = () => {
+    // Crossfade
+    imgEl(front).style.opacity = '0';
+    el.style.opacity           = '1';
+    front = back;
+    preloadNext(cur);
+  };
+  el.src = `/frames/${FRAMES[cur]}`;
+  if (instant) { el.style.transition = 'none'; imgEl(front).style.transition = 'none'; }
+  else         { el.style.transition = ''; imgEl(front).style.transition = ''; }
+
+  counter.textContent = `${cur + 1} / ${FRAMES.length}`;
+  const pct = FRAMES.length > 1 ? cur / (FRAMES.length - 1) * 100 : 0;
+  fill.style.width  = pct + '%';
+  thumb.style.left  = pct + '%';
+}
+
+function intervalMs() {
+  // speed slider 1–12 maps to 800ms–80ms
+  const v = parseInt(speedEl.value);
+  return Math.round(800 / v);
+}
+
+function startPlay() {
+  playing = true;
+  btnPlay.textContent = '⏸ Pause';
+  btnPlay.classList.add('active');
+  clearInterval(timer);
+  timer = setInterval(() => show(cur + 1), intervalMs());
+}
+
+function stopPlay() {
+  playing = false;
+  btnPlay.textContent = '▶ Play';
+  btnPlay.classList.remove('active');
+  clearInterval(timer);
+}
+
+function togglePlay() { playing ? stopPlay() : startPlay(); }
+
+btnPlay.addEventListener('click', togglePlay);
+document.getElementById('btn-restart').addEventListener('click', () => {
+  stopPlay(); show(0, true);
+});
+document.getElementById('btn-prev').addEventListener('click', () => { stopPlay(); show(cur - 1); });
+document.getElementById('btn-next').addEventListener('click', () => { stopPlay(); show(cur + 1); });
+
+// Click stage to advance
+document.getElementById('stage').addEventListener('click', e => {
+  if (playing) return;
+  const half = window.innerWidth / 2;
+  show(e.clientX < half ? cur - 1 : cur + 1);
+});
+
+// Speed slider: restart interval at new rate
+speedEl.addEventListener('input', () => {
+  if (playing) { clearInterval(timer); timer = setInterval(() => show(cur + 1), intervalMs()); }
+});
+
+// Progress bar scrub
+document.getElementById('progress-wrap').addEventListener('click', e => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct  = (e.clientX - rect.left) / rect.width;
+  const idx  = Math.round(pct * (FRAMES.length - 1));
+  stopPlay();
+  show(idx);
+});
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { stopPlay(); show(cur + 1); }
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   { stopPlay(); show(cur - 1); }
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  if (e.key === 'Home') { stopPlay(); show(0, true); }
+  if (e.key === 'End')  { stopPlay(); show(FRAMES.length - 1); }
+});
+
+// Initial load
+show(0, true);
+</script>
+</body>
+</html>
