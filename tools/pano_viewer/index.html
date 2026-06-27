@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panorama Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #111;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      user-select: none;
+    }
+
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      padding: 10px 16px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.65), transparent);
+      display: flex; align-items: center; gap: 16px; pointer-events: none;
+    }
+    #hud h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.03em; }
+    #info   { font-size: 12px; opacity: 0.65; }
+
+    #controls {
+      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+      font-size: 11px; opacity: 0.45; text-align: center; pointer-events: none;
+      white-space: nowrap;
+    }
+
+    #zoom-badge {
+      position: fixed; bottom: 36px; right: 16px; z-index: 10;
+      font-size: 11px; background: rgba(0,0,0,0.55); padding: 3px 8px;
+      border-radius: 4px; opacity: 0.7; pointer-events: none;
+    }
+
+    #viewport {
+      position: absolute; inset: 0;
+      overflow: hidden;
+      cursor: grab;
+    }
+    #viewport.dragging { cursor: grabbing; }
+
+    #img-wrap {
+      position: absolute;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    #pano {
+      display: block;
+      /* actual size set by JS once loaded */
+    }
+
+    #loading {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #111; z-index: 20;
+      transition: opacity 0.4s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading-text { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+    #bar-wrap { width: 260px; height: 3px; background: #333; border-radius: 2px; }
+    #bar      { height: 100%; background: #76b900; border-radius: 2px; width: 0%;
+                transition: width 0.15s; }
+  </style>
+</head>
+<body>
+
+  <div id="hud">
+    <h1>Panorama Viewer</h1>
+    <span id="info"></span>
+  </div>
+
+  <div id="controls">
+    Scroll to zoom &nbsp;·&nbsp; Drag to pan &nbsp;·&nbsp; Double-click to reset
+  </div>
+
+  <div id="zoom-badge">100%</div>
+
+  <div id="loading">
+    <div id="loading-text">Loading panorama…</div>
+    <div id="bar-wrap"><div id="bar"></div></div>
+  </div>
+
+  <div id="viewport">
+    <div id="img-wrap">
+      <img id="pano" src="pano.jpg" alt="panorama" draggable="false">
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const viewport  = document.getElementById('viewport');
+    const wrap      = document.getElementById('img-wrap');
+    const img       = document.getElementById('pano');
+    const info      = document.getElementById('info');
+    const badge     = document.getElementById('zoom-badge');
+    const loading   = document.getElementById('loading');
+    const bar       = document.getElementById('bar');
+
+    let scale = 1, tx = 0, ty = 0;
+    let minScale = 0.05, fitScale = 1;
+    let dragging = false, lastX = 0, lastY = 0;
+
+    function applyTransform() {
+      wrap.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+      badge.textContent = Math.round(scale * 100) + '%';
+    }
+
+    function clampPan() {
+      // Allow the image to be dragged but keep at least 60px visible on each side
+      const iw = img.naturalWidth  * scale;
+      const ih = img.naturalHeight * scale;
+      const vw = viewport.clientWidth;
+      const vh = viewport.clientHeight;
+      const margin = 60;
+      tx = Math.min(tx, vw - margin);
+      ty = Math.min(ty, vh - margin);
+      tx = Math.max(tx, margin - iw);
+      ty = Math.max(ty, margin - ih);
+    }
+
+    function fitToWindow() {
+      const vw = viewport.clientWidth;
+      const vh = viewport.clientHeight;
+      const scaleX = vw / img.naturalWidth;
+      const scaleY = vh / img.naturalHeight;
+      fitScale = Math.min(scaleX, scaleY);
+      scale = fitScale;
+      tx = (vw - img.naturalWidth  * scale) / 2;
+      ty = (vh - img.naturalHeight * scale) / 2;
+      applyTransform();
+    }
+
+    img.addEventListener('load', () => {
+      loading.classList.add('hidden');
+      info.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+      fitToWindow();
+    });
+
+    // Simulate progress bar (image loads all at once in browser)
+    let prog = 0;
+    const ticker = setInterval(() => {
+      prog = Math.min(prog + Math.random() * 8, 90);
+      bar.style.width = prog + '%';
+    }, 120);
+    img.addEventListener('load', () => {
+      clearInterval(ticker);
+      bar.style.width = '100%';
+    });
+
+    // Zoom on scroll
+    viewport.addEventListener('wheel', e => {
+      e.preventDefault();
+      const rect  = viewport.getBoundingClientRect();
+      const mx    = e.clientX - rect.left;
+      const my    = e.clientY - rect.top;
+      const delta = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const newScale = Math.max(minScale, Math.min(20, scale * delta));
+
+      // Zoom toward pointer
+      tx = mx - (mx - tx) * (newScale / scale);
+      ty = my - (my - ty) * (newScale / scale);
+      scale = newScale;
+      clampPan();
+      applyTransform();
+    }, { passive: false });
+
+    // Pan on drag
+    viewport.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      dragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      viewport.classList.add('dragging');
+    });
+    window.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      tx += e.clientX - lastX;
+      ty += e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      clampPan();
+      applyTransform();
+    });
+    window.addEventListener('mouseup', () => {
+      dragging = false;
+      viewport.classList.remove('dragging');
+    });
+
+    // Touch pan + pinch zoom
+    let lastTouches = null;
+    viewport.addEventListener('touchstart', e => {
+      e.preventDefault();
+      lastTouches = Array.from(e.touches);
+    }, { passive: false });
+    viewport.addEventListener('touchmove', e => {
+      e.preventDefault();
+      const touches = Array.from(e.touches);
+      if (touches.length === 1 && lastTouches && lastTouches.length === 1) {
+        tx += touches[0].clientX - lastTouches[0].clientX;
+        ty += touches[0].clientY - lastTouches[0].clientY;
+        clampPan();
+        applyTransform();
+      } else if (touches.length === 2 && lastTouches && lastTouches.length >= 2) {
+        const d0 = Math.hypot(lastTouches[1].clientX - lastTouches[0].clientX,
+                              lastTouches[1].clientY - lastTouches[0].clientY);
+        const d1 = Math.hypot(touches[1].clientX - touches[0].clientX,
+                              touches[1].clientY - touches[0].clientY);
+        const delta = d1 / Math.max(d0, 1);
+        const cx = (touches[0].clientX + touches[1].clientX) / 2;
+        const cy = (touches[0].clientY + touches[1].clientY) / 2;
+        const newScale = Math.max(minScale, Math.min(20, scale * delta));
+        tx = cx - (cx - tx) * (newScale / scale);
+        ty = cy - (cy - ty) * (newScale / scale);
+        scale = newScale;
+        clampPan();
+        applyTransform();
+      }
+      lastTouches = touches;
+    }, { passive: false });
+
+    // Double-click to reset to fit
+    viewport.addEventListener('dblclick', () => fitToWindow());
+
+    window.addEventListener('resize', () => fitToWindow());
+  })();
+  </script>
+</body>
+</html>
