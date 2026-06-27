@@ -1,170 +1,109 @@
-# Home Remodel Vision — Pipeline README
+# Home Remodel Vision
 
-Reconstruct any room from a walk-through video clip into a 3D Gaussian Splat you can explore in a browser.
+A local vision pipeline for interior remodeling, running on a DGX Spark (GB10, ARM64, CUDA 13.1).
+Built stage by stage inside NVIDIA AI Workbench.
 
 ---
 
-## Quick start
+## Stages
+
+| # | Stage | Script | Status |
+|---|---|---|---|
+| 1 | Vertical panorama stitch | `stitch_pano.sh` | ✅ Done |
+| 2 | Wall masking | — | Planned |
+| 3 | Material / swatch transfer | — | Planned |
+| 4 | Object removal + furniture injection | — | Planned |
+
+---
+
+## Stage 1 — Vertical Panorama Stitch
+
+Stitch an upper and lower photo of the same scene into one tall image.
+
+### Run it
 
 ```bash
-# 1. Reconstruct a room
-bash /project/process_room.sh <start_time> <end_time> <room_name> [fps]
-
-# 2. View it
-bash /project/view_room.sh <room_name>
-```
-
----
-
-## process_room.sh
-
-**Extracts frames → COLMAP SfM → 3DGS training → .ply splat**
-
-```
-bash /project/process_room.sh <start_time> <end_time> <room_name> [fps]
+bash /project/stitch_pano.sh <upper_image> <lower_image> <output_name>
 ```
 
 | Arg | Example | Notes |
 |---|---|---|
-| `start_time` | `00:01:30` or `90` | ffmpeg time — seconds or HH:MM:SS |
-| `end_time`   | `00:02:10` or `130` | pick a 30–90 s walk-through |
-| `room_name`  | `kitchen` | slug for output directory names |
-| `fps`        | `2` *(default)* | frames per second to extract; 2 fps → ~60 frames for 30 s |
+| `upper_image` | `data/pano/upper.jpg` | path to the upper photo (abs or relative to `/project`) |
+| `lower_image` | `data/pano/lower.jpg` | path to the lower photo |
+| `output_name` | `living_room` | basename only — output lands in `outputs/pano/<name>.jpg` |
 
 ### Example
 
 ```bash
-bash /project/process_room.sh 00:00:30 00:01:10 kitchen
+bash /project/stitch_pano.sh data/pano/IMG_2452.JPG data/pano/IMG_2453.JPG room1
 ```
 
-### What it does
+### How it works
 
-1. **Frame extraction** — ffmpeg trims the clip, rotates 90° clockwise (`transpose=1`), scales width to 1280 px, saves JPEG frames at the requested fps.
-2. **COLMAP feature extraction** — SIFT features on GPU.
-3. **COLMAP sequential matching** — matches consecutive frames (fast for video).
-4. **COLMAP mapper** — incremental SfM, produces camera poses + sparse point cloud.
-5. **3DGS training** — 7000 iterations, gsplat 1.5.x. Takes ~15–30 min on the GB10.
+1. Tries `cv2.Stitcher` (SCANS / flat projection) first.
+2. Falls back to SIFT feature detection (at ¼ scale for speed) → FLANN matching → RANSAC homography → feathered vertical blend.
+3. Output is a single JPEG in `outputs/pano/`.
 
-### Outputs
+### View in browser
 
-```
-/project/data/frames/<room_name>/       ← JPEG frames
-/project/outputs/<room_name>_colmap/    ← COLMAP workspace + database
-/project/outputs/<room_name>_3dgs/
-    <room_name>.ply              ← trained splat (load into viewer)
-    <room_name>_checkpoint.pt    ← gsplat training checkpoint
+After stitching, start the viewer:
+
+```bash
+python3 /project/tools/pano_viewer/serve.py outputs/pano/room1.jpg
 ```
 
-### Gotchas
+It prints the exact SSH tunnel command with the container's IP, e.g.:
 
-- **Minimum ~30 s clip, 2 fps** — COLMAP needs ≥20 registered frames for a good splat; too few and training degrades.
-- **Slow or static shots fail COLMAP** — the sequential matcher needs feature motion between frames. Pick a walking shot, not a pan from a tripod.
-- **Video source** — currently hardcoded to `/project/data/IMG_2445.MOV`. To use a different file, edit the `VIDEO=` line in `process_room.sh`.
-- **Room name must be a slug** (letters, digits, underscore) — it becomes a directory name.
-- **Re-running** overwrites existing frames and COLMAP workspace; the 3DGS output dir is preserved if already present.
+```
+Mac tunnel  →  ssh -L 8081:172.18.0.3:8081 spark-pharn.local
+Then open   →  http://localhost:8081/
+```
+
+The viewer supports scroll-to-zoom, drag-to-pan, and double-click-to-fit.
+
+### Files
+
+```
+stitch_pano.sh                    ← shell wrapper
+stitch_pano.py                    ← stitching logic
+tools/pano_viewer/
+    serve.py                      ← HTTP server (port 8081, 0.0.0.0)
+    index.html                    ← pan/zoom viewer
+outputs/pano/                     ← stitched results (gitignored)
+data/pano/                        ← input photos (gitignored)
+```
 
 ---
 
-## view_room.sh
+## Environment
 
-**Starts a local HTTP server and tells you the SSH tunnel command.**
-
-```
-bash /project/view_room.sh <room_name> [port]
-```
-
-| Arg | Default | Notes |
-|---|---|---|
-| `room_name` | `bedroom1` | must match what you passed to `process_room.sh` |
-| `port` | `8080` | TCP port inside the container |
-
-### Example
-
-```bash
-bash /project/view_room.sh kitchen
-```
-
-### How to open it on your Mac
-
-1. Run `view_room.sh` — it prints the SSH tunnel command.
-2. In a **new Mac terminal**, run:
-   ```bash
-   ssh -L 8080:localhost:8080 <spark-hostname>
-   ```
-   (Replace `<spark-hostname>` with the DGX Spark host or IP.)
-3. Open **http://localhost:8080/** in Chrome or Safari.
-4. The splat loads and you can orbit/zoom/pan.
-
-### Controls
-
-| Action | Input |
+| Component | Value |
 |---|---|
-| Orbit | Left-drag |
-| Zoom | Scroll wheel |
-| Pan | Right-drag |
+| Hardware | DGX Spark GB10, 128 GB unified memory, ARM64 |
+| OS | DGX OS (Ubuntu 24.04) |
+| Container | NVIDIA AI Workbench — PyTorch / CUDA 13.1 |
+| torch | `2.11.0a0+...nv26.02` (NVIDIA build, sm_121) |
+| Key constraint | Never reinstall or upgrade torch; use `--no-deps` for any pip install |
 
-### Gotchas
-
-- **One room at a time** — the server symlinks the chosen room's `.ply` to `scene.ply`; restart the server to switch rooms.
-- **Port 8080 in use** — run `pkill -f serve.py` then retry, or pass a different port: `bash view_room.sh kitchen 8081` and adjust the SSH tunnel accordingly.
-- **Large PLY files take 10–30 s to load** in the browser — the progress bar shows download progress.
-- **SharedArrayBuffer requirement** — the viewer uses `Cross-Origin-Embedder-Policy: require-corp`. Some browsers block this for localhost; Chrome works reliably.
+See `BUILD_GUIDE.md` for the full reproduction guide, including all hard-won environment lessons.
 
 ---
 
-## How the viewer works
+## SSH tunnel note
 
-```
-/project/tools/viewer/
-    serve.py                     ← Python HTTP server (no npm/node required)
-    index.html                   ← viewer UI
-    three.module.js              ← three.js r176 extras layer
-    three.core.js                ← three.js r176 core (fetched from unpkg at setup)
-    gaussian-splats-3d.module.js ← GaussianSplats3D splat renderer
-    OrbitControls.js             ← orbit/pan/zoom controls
-    scene.ply → (symlink)        ← points to the active room's .ply
-```
-
----
-
-## Re-running after a container rebuild
-
-The container is ephemeral; `/project` is the persistent host mount. After a rebuild:
-
-1. **Python deps** (gsplat, torch, etc.) are re-installed by `postBuild.bash` at container start.
-2. **COLMAP** lives in `/project/tools/envs/colmap/` — persists.
-3. **Trained splats** live in `/project/outputs/` — persists.
-4. **Source video** is in `/project/data/IMG_2445.MOV` — persists.
-5. **Claude Code** is re-installed by `postBuild.bash` (curl install, user-scope, no sudo).
-
----
-
-## Changing training length
-
-Default is 7000 iterations (~15–30 min). Pass `--n-iters` directly to train faster:
+Scripts print the tunnel command with the **container's IP** (not `localhost`), because
+the server runs inside the Workbench container on a Docker bridge network:
 
 ```bash
-python3 /project/train_3dgs.py \
-    --colmap-dir /project/outputs/kitchen_colmap/dense \
-    --output-dir /project/outputs/kitchen_3dgs \
-    --name kitchen \
-    --n-iters 3000
+ssh -L 8081:<container-ip>:8081 <spark-hostname>
 ```
+
+If the container restarts and gets a new IP, run `hostname -I | awk '{print $1}'`
+inside the container to get the current one.
 
 ---
 
-## Full example end-to-end
+## Archived — 3DGS pipeline
 
-```bash
-# Inside the Workbench container (nvwb attach):
-
-# Reconstruct a kitchen segment (3:00–3:40 in the video, 2 fps = ~80 frames)
-bash /project/process_room.sh 00:03:00 00:03:40 kitchen
-
-# View it
-bash /project/view_room.sh kitchen
-
-# On Mac (separate terminal):
-ssh -L 8080:localhost:8080 <spark-hostname>
-# open http://localhost:8080/
-```
+The earlier 3D Gaussian Splat reconstruction pipeline (COLMAP + gsplat) is preserved in
+`archive_3d/`. It is no longer the active direction.
