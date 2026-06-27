@@ -31,7 +31,8 @@ pip install \
     hydra-core iopath \
     roma pyglet "huggingface-hub[torch]>=0.22" tensorboard \
     addict yapf "supervision>=0.22.0" pycocotools \
-    trimesh plyfile scikit-image
+    trimesh plyfile scikit-image \
+    gsplat
 
 # ── GroundingDINO weights ──
 mkdir -p "$REPOS/GroundingDINO/weights"
@@ -40,3 +41,13 @@ mkdir -p "$REPOS/GroundingDINO/weights"
         -O "$REPOS/GroundingDINO/weights/groundingdino_swint_ogc.pth"
 
 echo "Pipeline repos and dependencies installed."
+
+# ── Claude Code CLI ──
+# Install user-scope (no sudo); ~/.nvm and ~/.local/bin are user-writable.
+# The install script uses curl internally, which is present in the container.
+if ! command -v claude &>/dev/null; then
+    curl -fsSL https://claude.ai/install.sh | bash
+    echo "Claude Code installed."
+else
+    echo "Claude Code already present: $(claude --version 2>/dev/null || true)"
+fi

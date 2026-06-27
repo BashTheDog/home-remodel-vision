@@ -106,7 +106,23 @@ environment:
             target: ""
     compose_file_path: ""
 execution:
-    apps: []
+    apps:
+        - name: splat-viewer
+          type: custom
+          class: webapp
+          start_command: python3 /project/tools/viewer/serve.py
+          health_check_command: '[ $(curl -o /dev/null -s -w "%{http_code}" http://localhost:8080/) == "200" ]'
+          stop_command: pkill -f "serve.py"
+          user_msg: ""
+          logfile_path: ""
+          timeout_seconds: 30
+          icon_url: ""
+          webapp_options:
+            autolaunch: false
+            port: "8080"
+            proxy:
+                trim_prefix: false
+            url: http://localhost:8080
     resources:
         gpu:
             requested: 1
