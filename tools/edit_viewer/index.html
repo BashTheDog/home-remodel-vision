@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Before / After</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; color: #eee; font-family: system-ui, sans-serif;
+           overflow: hidden; width: 100vw; height: 100vh; user-select: none; }
+
+    /* ── HUD ───────────────────────────────────────────────────────────── */
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+      padding: 10px 16px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+      display: flex; align-items: center; gap: 16px; pointer-events: none;
+    }
+    #hud h1  { font-size: 14px; font-weight: 600; }
+    #hud nav { display: flex; gap: 6px; pointer-events: all; }
+    #hud button {
+      font-size: 11px; padding: 3px 10px; border-radius: 4px; border: 1px solid #555;
+      background: rgba(255,255,255,0.08); color: #ddd; cursor: pointer;
+    }
+    #hud button.active { background: #76b900; border-color: #76b900; color: #000; font-weight: 600; }
+
+    #controls {
+      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+      font-size: 11px; opacity: 0.4; pointer-events: none; white-space: nowrap;
+    }
+
+    /* ── main stage ───────────────────────────────────────────────────── */
+    #stage { position: absolute; inset: 0; overflow: hidden; cursor: grab; }
+    #stage.dragging { cursor: grabbing; }
+    #img-wrap { position: absolute; transform-origin: 0 0; will-change: transform; }
+
+    /* ── compare mode ────────────────────────────────────────────────── */
+    #compare-wrap {
+      position: relative; display: inline-block; line-height: 0;
+    }
+    #img-after  { display: block; }
+    #img-before {
+      position: absolute; top: 0; left: 0;
+      clip-path: inset(0 50% 0 0);   /* updated by JS */
+    }
+    #divider {
+      position: absolute; top: 0; bottom: 0; width: 2px;
+      background: rgba(255,255,255,0.85);
+      left: 50%; transform: translateX(-50%);
+      cursor: ew-resize; z-index: 5;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #divider-handle {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: #fff; border: 2px solid #222;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #333; pointer-events: none;
+    }
+    #label-before, #label-after {
+      position: absolute; bottom: 10px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+      padding: 3px 8px; border-radius: 3px; pointer-events: none;
+      background: rgba(0,0,0,0.55);
+    }
+    #label-before { left: 10px; }
+    #label-after  { right: 10px; }
+
+    /* ── mask mode ───────────────────────────────────────────────────── */
+    #img-mask { display: block; }
+
+    /* ── loading ─────────────────────────────────────────────────────── */
+    #loading {
+      position: fixed; inset: 0; background: #111; z-index: 40;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 600; transition: opacity 0.3s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <div id="hud">
+    <h1>Edit Viewer</h1>
+    <nav>
+      <button id="btn-compare" class="active">Compare</button>
+      <button id="btn-before">Before</button>
+      <button id="btn-after">After</button>
+      <button id="btn-mask">Mask</button>
+    </nav>
+  </div>
+
+  <div id="controls">Drag divider to compare &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Drag canvas to pan &nbsp;·&nbsp; Dbl-click to reset</div>
+
+  <div id="loading">Loading images…</div>
+
+  <div id="stage">
+    <div id="img-wrap">
+
+      <!-- Compare view -->
+      <div id="compare-wrap">
+        <img id="img-after"  src="after.jpg"  alt="after"  draggable="false">
+        <img id="img-before" src="before.jpg" alt="before" draggable="false">
+        <div id="divider"><div id="divider-handle">⇔</div></div>
+        <div id="label-before">BEFORE</div>
+        <div id="label-after">AFTER</div>
+      </div>
+
+      <!-- Single-image views -->
+      <img id="img-mask"       src="mask.jpg"   alt="mask"   draggable="false" style="display:none">
+      <img id="img-solo-before" src="before.jpg" alt="before" draggable="false" style="display:none">
+      <img id="img-solo-after"  src="after.jpg"  alt="after"  draggable="false" style="display:none">
+
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const stage    = document.getElementById('stage');
+    const wrap     = document.getElementById('img-wrap');
+    const loading  = document.getElementById('loading');
+    const divider  = document.getElementById('divider');
+    const cmpWrap  = document.getElementById('compare-wrap');
+    const imgBefore = document.getElementById('img-before');
+    const imgAfter  = document.getElementById('img-after');
+    const imgMask   = document.getElementById('img-mask');
+    const imgSoloBefore = document.getElementById('img-solo-before');
+    const imgSoloAfter  = document.getElementById('img-solo-after');
+
+    const btns = {
+      compare: document.getElementById('btn-compare'),
+      before:  document.getElementById('btn-before'),
+      after:   document.getElementById('btn-after'),
+      mask:    document.getElementById('btn-mask'),
+    };
+
+    // ── mode switching ──────────────────────────────────────────────────────
+    let mode = 'compare';
+    function setMode(m) {
+      mode = m;
+      Object.values(btns).forEach(b => b.classList.remove('active'));
+      btns[m].classList.add('active');
+
+      cmpWrap.style.display        = m === 'compare' ? '' : 'none';
+      imgMask.style.display        = m === 'mask'    ? 'block' : 'none';
+      imgSoloBefore.style.display  = m === 'before'  ? 'block' : 'none';
+      imgSoloAfter.style.display   = m === 'after'   ? 'block' : 'none';
+
+      fitToWindow();
+    }
+    Object.entries(btns).forEach(([k, b]) => b.addEventListener('click', () => setMode(k)));
+
+    // ── pan/zoom shared state ───────────────────────────────────────────────
+    let scale = 1, tx = 0, ty = 0;
+    let dragging = false, panStartX = 0, panStartY = 0, panOriginTx = 0, panOriginTy = 0;
+
+    function applyTransform() {
+      wrap.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+    }
+    function clamp() {
+      const iw = naturalW() * scale, ih = naturalH() * scale;
+      const vw = stage.clientWidth,  vh = stage.clientHeight;
+      const m = 60;
+      tx = Math.min(tx, vw - m); tx = Math.max(tx, m - iw);
+      ty = Math.min(ty, vh - m); ty = Math.max(ty, m - ih);
+    }
+    function naturalW() {
+      if (mode === 'compare') return imgAfter.naturalWidth  || 800;
+      if (mode === 'mask')    return imgMask.naturalWidth   || 800;
+      if (mode === 'before')  return imgSoloBefore.naturalWidth || 800;
+      return imgSoloAfter.naturalWidth || 800;
+    }
+    function naturalH() {
+      if (mode === 'compare') return imgAfter.naturalHeight  || 600;
+      if (mode === 'mask')    return imgMask.naturalHeight   || 600;
+      if (mode === 'before')  return imgSoloBefore.naturalHeight || 600;
+      return imgSoloAfter.naturalHeight || 600;
+    }
+    function fitToWindow() {
+      const vw = stage.clientWidth, vh = stage.clientHeight;
+      scale = Math.min(vw / naturalW(), vh / naturalH());
+      tx = (vw - naturalW() * scale) / 2;
+      ty = (vh - naturalH() * scale) / 2;
+      applyTransform();
+    }
+
+    // ── compare divider drag ────────────────────────────────────────────────
+    let splitFrac = 0.5;
+    let dividingDrag = false;
+
+    function updateSplit(clientX) {
+      const rect = cmpWrap.getBoundingClientRect();
+      splitFrac = Math.max(0.02, Math.min(0.98, (clientX - rect.left) / rect.width));
+      const pct = (splitFrac * 100).toFixed(2);
+      imgBefore.style.clipPath = `inset(0 ${(100 - splitFrac * 100).toFixed(2)}% 0 0)`;
+      divider.style.left = pct + '%';
+    }
+
+    divider.addEventListener('mousedown', e => {
+      e.stopPropagation();
+      dividingDrag = true;
+    });
+    divider.addEventListener('touchstart', e => {
+      e.stopPropagation(); e.preventDefault();
+      dividingDrag = true;
+    }, { passive: false });
+
+    // ── canvas pan ──────────────────────────────────────────────────────────
+    stage.addEventListener('mousedown', e => {
+      if (e.button !== 0 || dividingDrag) return;
+      dragging = true;
+      panStartX = e.clientX; panStartY = e.clientY;
+      panOriginTx = tx; panOriginTy = ty;
+      stage.classList.add('dragging');
+    });
+    window.addEventListener('mousemove', e => {
+      if (dividingDrag && mode === 'compare') { updateSplit(e.clientX); return; }
+      if (!dragging) return;
+      tx = panOriginTx + (e.clientX - panStartX);
+      ty = panOriginTy + (e.clientY - panStartY);
+      clamp(); applyTransform();
+    });
+    window.addEventListener('mouseup', () => {
+      dragging = false; dividingDrag = false;
+      stage.classList.remove('dragging');
+    });
+
+    // ── scroll zoom ─────────────────────────────────────────────────────────
+    stage.addEventListener('wheel', e => {
+      e.preventDefault();
+      const rect = stage.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const delta = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const ns = Math.max(0.05, Math.min(20, scale * delta));
+      tx = mx - (mx - tx) * (ns / scale);
+      ty = my - (my - ty) * (ns / scale);
+      scale = ns; clamp(); applyTransform();
+    }, { passive: false });
+
+    stage.addEventListener('dblclick', () => fitToWindow());
+    window.addEventListener('resize', () => fitToWindow());
+
+    // ── wait for images ─────────────────────────────────────────────────────
+    const allImgs = [imgAfter, imgBefore, imgMask];
+    let loaded = 0;
+    allImgs.forEach(img => {
+      if (img.complete && img.naturalWidth) { loaded++; check(); return; }
+      img.addEventListener('load', () => { loaded++; check(); });
+      img.addEventListener('error', () => { loaded++; check(); });
+    });
+    function check() {
+      if (loaded < allImgs.length) return;
+      loading.classList.add('hidden');
+      // set compare images to same size as after
+      imgBefore.style.width  = imgAfter.naturalWidth  + 'px';
+      imgBefore.style.height = imgAfter.naturalHeight + 'px';
+      updateSplit(stage.clientWidth / 2 + stage.getBoundingClientRect().left);
+      fitToWindow();
+    }
+  })();
+  </script>
+</body>
+</html>

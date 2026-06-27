@@ -55,8 +55,9 @@ cover/
 # Workbench Project Layout
 data/scratch/*
 !data/scratch/.gitkeep
-# Pipeline model repos (cloned at runtime, not version-controlled)
+# Pipeline model repos and weights (cloned/downloaded at runtime)
 repos/
+models/
 
 # Generated outputs (large files, not version-controlled)
 outputs/
@@ -64,8 +65,11 @@ outputs/
 # Input media (photos — add specific subdirs as needed)
 data/pano/
 
-# Viewer symlink (generated at serve time)
+# Viewer symlinks (generated at serve time)
 tools/pano_viewer/pano.jpg
+tools/edit_viewer/before.jpg
+tools/edit_viewer/after.jpg
+tools/edit_viewer/mask.jpg
 
 # macOS resource fork junk
 ._*
