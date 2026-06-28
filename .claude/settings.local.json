@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -I http://localhost:8081/pano.jpg)",
+      "Bash(ip route *)",
+      "Read(//proc/193/net/**)",
+      "Read(//home/ubuntu/**)",
+      "Bash(git remote *)",
+      "Bash(env)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(pip install *)",
+      "Bash(python3 /project/remove_object.py /project/outputs/pano/test_stitch.jpg pano_test --prompt couch)",
+      "Bash(git reset *)",
+      "Bash(curl -s http://localhost:8083/status)"
+    ]
+  }
+}
