@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Object Removal Editor</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#111; color:#eee; font-family:system-ui,sans-serif;
+           width:100vw; height:100vh; overflow:hidden; user-select:none; }
+
+    /* ── toolbar ── */
+    #toolbar {
+      position:fixed; top:0; left:0; right:0; z-index:20; height:48px;
+      background:rgba(0,0,0,0.8); backdrop-filter:blur(6px);
+      display:flex; align-items:center; gap:10px; padding:0 16px;
+      border-bottom:1px solid #333;
+    }
+    #toolbar h1 { font-size:13px; font-weight:600; margin-right:6px; white-space:nowrap; }
+    .sep { width:1px; height:24px; background:#444; margin:0 4px; }
+    button {
+      font-size:12px; padding:5px 12px; border-radius:5px; border:1px solid #555;
+      background:rgba(255,255,255,0.08); color:#ddd; cursor:pointer;
+      white-space:nowrap;
+    }
+    button:hover { background:rgba(255,255,255,0.15); }
+    button.active { background:#76b900; border-color:#76b900; color:#000; font-weight:700; }
+    button.danger  { border-color:#c0392b; color:#e74c3c; }
+    button.danger:hover { background:#c0392b; color:#fff; }
+    button:disabled { opacity:0.4; cursor:default; }
+    #btn-remove { background:#1a6; border-color:#1a6; color:#fff; font-weight:700; }
+    #btn-remove:hover:not(:disabled) { background:#1c7; }
+
+    #status-bar {
+      margin-left:auto; font-size:11px; opacity:0.6; white-space:nowrap;
+    }
+
+    /* ── hint bar ── */
+    #hint {
+      position:fixed; bottom:0; left:0; right:0; z-index:20; height:30px;
+      background:rgba(0,0,0,0.6); display:flex; align-items:center;
+      justify-content:center; font-size:11px; opacity:0.5; gap:24px;
+    }
+
+    /* ── stage ── */
+    #stage {
+      position:absolute; top:48px; bottom:30px; left:0; right:0;
+      overflow:hidden; cursor:crosshair;
+    }
+    #stage.panning { cursor:grabbing; }
+
+    /* ── image wrap: natural-size, transformed for zoom/pan ── */
+    #img-wrap {
+      position:absolute;
+      transform-origin:0 0;
+      will-change:transform;
+    }
+    #main-img { display:block; }
+
+    /* mask overlay: absolutely positioned inside img-wrap in image-pixel space */
+    #mask-overlay {
+      position:absolute; top:0; left:0;
+      pointer-events:none; display:none;
+      image-rendering:pixelated;
+    }
+
+    /* result overlay: shown after inpaint */
+    #result-img {
+      position:absolute; top:0; left:0;
+      pointer-events:none; display:none;
+    }
+
+    /* compare clip applied via JS */
+    #result-img.compare { clip-path: inset(0 50% 0 0); }
+
+    /* compare divider */
+    #compare-line {
+      position:fixed; top:48px; bottom:30px; width:3px;
+      background:rgba(255,255,255,0.8);
+      transform:translateX(-50%);
+      cursor:ew-resize; z-index:15; display:none;
+      align-items:center; justify-content:center;
+    }
+    #compare-line.visible { display:flex; }
+    #compare-handle {
+      width:30px; height:30px; border-radius:50%;
+      background:#fff; border:2px solid #333;
+      display:flex; align-items:center; justify-content:center;
+      font-size:12px; color:#333; pointer-events:none;
+    }
+
+    /* points */
+    .pt {
+      position:absolute; width:14px; height:14px; border-radius:50%;
+      transform:translate(-50%,-50%);
+      border:2px solid rgba(255,255,255,0.9);
+      pointer-events:none;
+    }
+    .pt.pos { background:rgba(50,200,50,0.85); }
+    .pt.neg { background:rgba(220,50,50,0.85); }
+
+    /* loading splash */
+    #loading {
+      position:fixed; inset:0; background:#111; z-index:50;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:14px;
+    }
+    #loading h2 { font-size:18px; }
+    #loading p  { font-size:13px; opacity:0.6; }
+    #loading.hidden { display:none; }
+
+    /* spinner */
+    .spin {
+      width:32px; height:32px; border:3px solid #333;
+      border-top-color:#76b900; border-radius:50%;
+      animation:spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* busy overlay */
+    #busy {
+      position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:40;
+      display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    }
+    #busy.visible { display:flex; }
+    #busy-msg { font-size:15px; font-weight:600; }
+  </style>
+</head>
+<body>
+
+<!-- Loading splash (shown while SAM2 warms up) -->
+<div id="loading">
+  <div class="spin"></div>
+  <h2>Loading SAM2…</h2>
+  <p>Large model (857 MB) — takes ~10 s on first load</p>
+</div>
+
+<!-- Busy overlay (shown during segment / inpaint) -->
+<div id="busy">
+  <div class="spin"></div>
+  <div id="busy-msg">Running SAM2…</div>
+</div>
+
+<!-- Toolbar -->
+<div id="toolbar">
+  <h1>Object Removal</h1>
+  <div class="sep"></div>
+
+  <button id="btn-mode-add"    class="active" title="Left-click to mark object">+ Add</button>
+  <button id="btn-mode-remove" title="Left-click to exclude region">− Exclude</button>
+
+  <div class="sep"></div>
+
+  <button id="btn-reset"  class="danger">Reset</button>
+  <button id="btn-remove" disabled>Remove Object</button>
+
+  <div class="sep"></div>
+
+  <button id="btn-compare" style="display:none">◧ Compare</button>
+  <button id="btn-accept"  style="display:none">✓ Accept result</button>
+  <button id="btn-retry"   style="display:none">↩ Try again</button>
+
+  <span id="status-bar">Click on the object to mask it</span>
+</div>
+
+<!-- Compare divider -->
+<div id="compare-line">
+  <div id="compare-handle">⇔</div>
+</div>
+
+<!-- Stage -->
+<div id="stage">
+  <div id="img-wrap">
+    <img id="main-img"    src="/image"      alt="input"  draggable="false">
+    <img id="result-img"  src=""            alt="result" draggable="false">
+    <img id="mask-overlay" src=""           alt="mask"   draggable="false">
+  </div>
+</div>
+
+<!-- Hint bar -->
+<div id="hint">
+  <span>Left-click → add to mask</span>
+  <span>Right-click → exclude</span>
+  <span>Scroll → zoom</span>
+  <span>Middle-drag → pan</span>
+  <span>Double-click → fit</span>
+</div>
+
+<script>
+(() => {
+  // ── elements ──────────────────────────────────────────────────────────────
+  const stage       = document.getElementById('stage');
+  const imgWrap     = document.getElementById('img-wrap');
+  const mainImg     = document.getElementById('main-img');
+  const resultImg   = document.getElementById('result-img');
+  const maskOverlay = document.getElementById('mask-overlay');
+  const loading     = document.getElementById('loading');
+  const busy        = document.getElementById('busy');
+  const busyMsg     = document.getElementById('busy-msg');
+  const statusBar   = document.getElementById('status-bar');
+  const compareLine = document.getElementById('compare-line');
+
+  const btnModeAdd    = document.getElementById('btn-mode-add');
+  const btnModeRemove = document.getElementById('btn-mode-remove');
+  const btnReset      = document.getElementById('btn-reset');
+  const btnRemove     = document.getElementById('btn-remove');
+  const btnCompare    = document.getElementById('btn-compare');
+  const btnAccept     = document.getElementById('btn-accept');
+  const btnRetry      = document.getElementById('btn-retry');
+
+  // ── state ─────────────────────────────────────────────────────────────────
+  let tx = 0, ty = 0, scale = 1;
+  let mode        = 'add';    // 'add' | 'exclude'
+  let points      = [];       // [{x,y,label}]
+  let hasMask     = false;
+  let hasResult   = false;
+  let comparing   = false;
+  let compareFrac = 0.5;
+  let dividerDrag = false;
+  let panDrag     = false;
+  let panStartX   = 0, panStartY = 0, panOriginTx = 0, panOriginTy = 0;
+
+  // ── wait for SAM2 to be ready ─────────────────────────────────────────────
+  function pollReady() {
+    fetch('/status').then(r=>r.json()).then(d => {
+      if (d.ready) { loading.classList.add('hidden'); }
+      else         { setTimeout(pollReady, 1000); }
+    }).catch(() => setTimeout(pollReady, 2000));
+  }
+  pollReady();
+
+  // ── zoom/pan ──────────────────────────────────────────────────────────────
+  function applyTransform() {
+    imgWrap.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+    if (comparing) updateCompareLine();
+  }
+
+  function clamp() {
+    const iw = mainImg.naturalWidth  * scale;
+    const ih = mainImg.naturalHeight * scale;
+    const vw = stage.clientWidth, vh = stage.clientHeight;
+    const m  = 60;
+    tx = Math.min(tx, vw-m); tx = Math.max(tx, m-iw);
+    ty = Math.min(ty, vh-m); ty = Math.max(ty, m-ih);
+  }
+
+  function fitToWindow() {
+    const vw = stage.clientWidth, vh = stage.clientHeight;
+    scale = Math.min(vw / mainImg.naturalWidth, vh / mainImg.naturalHeight);
+    tx = (vw - mainImg.naturalWidth  * scale) / 2;
+    ty = (vh - mainImg.naturalHeight * scale) / 2;
+    applyTransform();
+  }
+
+  // Canvas → image coords
+  function toImageCoords(cx, cy) {
+    const rect = stage.getBoundingClientRect();
+    return {
+      x: (cx - rect.left - tx) / scale,
+      y: (cy - rect.top  - ty) / scale,
+    };
+  }
+
+  stage.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect  = stage.getBoundingClientRect();
+    const mx    = e.clientX - rect.left;
+    const my    = e.clientY - rect.top;
+    const delta = e.deltaY < 0 ? 1.12 : 1/1.12;
+    const ns    = Math.max(0.02, Math.min(20, scale * delta));
+    tx = mx - (mx-tx)*(ns/scale);
+    ty = my - (my-ty)*(ns/scale);
+    scale = ns;
+    clamp(); applyTransform();
+  }, { passive:false });
+
+  // Middle-button or space+drag pan
+  stage.addEventListener('mousedown', e => {
+    if (e.button === 1 || e.button === 2 && e.altKey) {
+      e.preventDefault();
+      panDrag = true;
+      panStartX = e.clientX; panStartY = e.clientY;
+      panOriginTx = tx; panOriginTy = ty;
+      stage.classList.add('panning');
+    }
+  });
+  window.addEventListener('mousemove', e => {
+    if (panDrag) {
+      tx = panOriginTx + (e.clientX - panStartX);
+      ty = panOriginTy + (e.clientY - panStartY);
+      clamp(); applyTransform();
+    }
+    if (dividerDrag) updateDivider(e.clientX);
+  });
+  window.addEventListener('mouseup', e => {
+    if (e.button === 1) { panDrag = false; stage.classList.remove('panning'); }
+    if (dividerDrag)    { dividerDrag = false; }
+  });
+
+  stage.addEventListener('dblclick', () => fitToWindow());
+  window.addEventListener('resize',  () => fitToWindow());
+
+  // ── click → segment ───────────────────────────────────────────────────────
+  stage.addEventListener('click', e => {
+    if (hasResult || loading.classList.contains('hidden') === false) return;
+    if (e.button !== 0 || panDrag) return;
+    const {x, y} = toImageCoords(e.clientX, e.clientY);
+    if (x < 0 || y < 0 || x > mainImg.naturalWidth || y > mainImg.naturalHeight) return;
+    addPoint(Math.round(x), Math.round(y), 1);
+  });
+
+  stage.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    if (hasResult) return;
+    const {x, y} = toImageCoords(e.clientX, e.clientY);
+    if (x < 0 || y < 0) return;
+    addPoint(Math.round(x), Math.round(y), 0);
+  });
+
+  function addPoint(x, y, label) {
+    // Override label with current mode
+    label = (mode === 'add') ? 1 : 0;
+    points.push({x, y, label});
+    renderPoints();
+    runSegment();
+  }
+
+  function renderPoints() {
+    // Remove old point elements
+    imgWrap.querySelectorAll('.pt').forEach(el => el.remove());
+    points.forEach(({x, y, label}) => {
+      const el = document.createElement('div');
+      el.className = 'pt ' + (label ? 'pos' : 'neg');
+      el.style.left = x + 'px';
+      el.style.top  = y + 'px';
+      imgWrap.appendChild(el);
+    });
+  }
+
+  // ── API calls ─────────────────────────────────────────────────────────────
+  function showBusy(msg) { busyMsg.textContent = msg; busy.classList.add('visible'); }
+  function hideBusy()    { busy.classList.remove('visible'); }
+
+  function runSegment() {
+    showBusy('Running SAM2…');
+    setStatus('Segmenting…');
+    fetch('/segment', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        points: points.map(p => [p.x, p.y]),
+        labels: points.map(p => p.label),
+      }),
+    })
+    .then(r => r.json())
+    .then(d => {
+      hideBusy();
+      if (d.error) { setStatus('Error: ' + d.error); return; }
+      const [bx1, by1, bx2, by2] = d.bounds;
+      // Position mask overlay in image-pixel space (inside img-wrap)
+      maskOverlay.onload = null;
+      maskOverlay.src    = 'data:image/png;base64,' + d.mask_b64;
+      maskOverlay.style.left   = bx1 + 'px';
+      maskOverlay.style.top    = by1 + 'px';
+      maskOverlay.style.width  = (bx2-bx1) + 'px';
+      maskOverlay.style.height = (by2-by1) + 'px';
+      maskOverlay.style.display = 'block';
+      hasMask = true;
+      btnRemove.disabled = false;
+      const cov = (d.coverage/1000).toFixed(0);
+      setStatus(`Mask ready  ·  score ${d.score}  ·  ${cov}K px selected  ·  right-click to exclude`);
+    })
+    .catch(err => { hideBusy(); setStatus('Segment error: ' + err); });
+  }
+
+  btnRemove.addEventListener('click', () => {
+    if (!hasMask) return;
+    showBusy('Inpainting with LaMa…');
+    setStatus('Inpainting…');
+    fetch('/inpaint', { method:'POST' })
+    .then(r => r.json())
+    .then(d => {
+      hideBusy();
+      if (d.error) { setStatus('Error: ' + d.error); return; }
+      // Load result
+      resultImg.src     = '/result.jpg?t=' + Date.now();
+      resultImg.style.width  = mainImg.naturalWidth  + 'px';
+      resultImg.style.height = mainImg.naturalHeight + 'px';
+      resultImg.style.display = 'block';
+      maskOverlay.style.display = 'none';
+      hasResult = true;
+      // Switch to compare mode
+      enterCompare();
+      setStatus('Done — drag the divider to compare');
+      btnRemove.style.display  = 'none';
+      btnCompare.style.display = 'none';
+      btnAccept.style.display  = '';
+      btnRetry.style.display   = '';
+    })
+    .catch(err => { hideBusy(); setStatus('Inpaint error: ' + err); });
+  });
+
+  btnReset.addEventListener('click', () => {
+    fetch('/reset', {method:'POST'});
+    points = [];
+    hasMask = false;
+    hasResult = false;
+    comparing = false;
+    renderPoints();
+    maskOverlay.style.display  = 'none';
+    resultImg.style.display    = 'none';
+    compareLine.classList.remove('visible');
+    resultImg.classList.remove('compare');
+    btnRemove.disabled         = true;
+    btnRemove.style.display    = '';
+    btnCompare.style.display   = 'none';
+    btnAccept.style.display    = 'none';
+    btnRetry.style.display     = 'none';
+    setStatus('Reset — click on the object to mask it');
+  });
+
+  btnRetry.addEventListener('click', () => {
+    hasResult = false;
+    comparing = false;
+    resultImg.style.display   = 'none';
+    compareLine.classList.remove('visible');
+    resultImg.classList.remove('compare');
+    btnRemove.disabled        = false;
+    btnRemove.style.display   = '';
+    btnAccept.style.display   = 'none';
+    btnRetry.style.display    = 'none';
+    setStatus('Add or adjust points, then click Remove again');
+  });
+
+  // ── mode buttons ──────────────────────────────────────────────────────────
+  btnModeAdd.addEventListener('click', () => {
+    mode = 'add';
+    btnModeAdd.classList.add('active');
+    btnModeRemove.classList.remove('active');
+  });
+  btnModeRemove.addEventListener('click', () => {
+    mode = 'exclude';
+    btnModeRemove.classList.add('active');
+    btnModeAdd.classList.remove('active');
+  });
+
+  // ── compare slider ────────────────────────────────────────────────────────
+  function enterCompare() {
+    comparing   = true;
+    compareFrac = 0.5;
+    resultImg.classList.add('compare');
+    compareLine.classList.add('visible');
+    updateCompareLine();
+    btnCompare.style.display = '';
+  }
+
+  function updateCompareLine() {
+    const stageRect = stage.getBoundingClientRect();
+    const x = stageRect.left + stageRect.width * compareFrac;
+    compareLine.style.left = x + 'px';
+    const pct = (compareFrac * 100).toFixed(2);
+    resultImg.style.clipPath = `inset(0 ${(100-compareFrac*100).toFixed(2)}% 0 0)`;
+  }
+
+  function updateDivider(clientX) {
+    const rect  = stage.getBoundingClientRect();
+    compareFrac = Math.max(0.01, Math.min(0.99, (clientX - rect.left) / rect.width));
+    updateCompareLine();
+  }
+
+  compareLine.addEventListener('mousedown', e => {
+    e.stopPropagation(); dividerDrag = true;
+  });
+
+  // ── status ────────────────────────────────────────────────────────────────
+  function setStatus(msg) { statusBar.textContent = msg; }
+
+  // ── init ──────────────────────────────────────────────────────────────────
+  mainImg.addEventListener('load', () => {
+    resultImg.style.width  = mainImg.naturalWidth  + 'px';
+    resultImg.style.height = mainImg.naturalHeight + 'px';
+    fitToWindow();
+  });
+
+})();
+</script>
+</body>
+</html>
